@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"hash/fnv"
-	"log"
 )
 
 const (
@@ -51,13 +50,13 @@ func hashKey(b []byte) uint32 {
 // Read about it at http://hypirion.com/musings/understanding-persistent-vector-pt-2
 type Trie struct {
 	depth    uint32
-	vals     *List
 	parent   *Trie
+	vals     []*trieKeyValue
 	children [width]*Trie
 }
 
 // NewTrie creates and returns a new *Trie
-func NewTrie(parent *Trie, vals *List) *Trie {
+func NewTrie(parent *Trie, vals []*trieKeyValue) *Trie {
 	t := &Trie{
 		parent: parent,
 		vals:   vals,
@@ -82,7 +81,7 @@ func (t *Trie) String() string {
 			b.WriteString(fmt.Sprintf("\t%s\n", t.children[i]))
 		}
 	}
-	b.WriteString(t.vals.String())
+	b.WriteString(fmt.Sprintf("%v", t.vals))
 	b.WriteString("\n}")
 	return b.String()
 }
@@ -106,16 +105,33 @@ func (t *Trie) Put(key []byte, val interface{}) *Trie {
 	for y.depth < 8 {
 		if !y.test(kv) {
 			// if the slot is open at this level, insert the kv
-			y.children[kv.indexAtDepth(y.depth)] = NewTrie(y, NewList(kv))
+			y.children[kv.indexAtDepth(y.depth)] = NewTrie(y, []*trieKeyValue{kv})
 			return y
 		}
 		y = y.children[kv.indexAtDepth(y.depth)]
+
+		// check to see if any of the "vals" stored at this level contain this hash
+		for i := 0; i < len(y.vals); i++ {
+			if y.vals[i].sameKey(kv) {
+				y.vals[i] = kv
+				return t
+			}
+
+		}
 		path.Prepend(y)
 	}
 
-	y.vals.Prepend(kv)
+	// because we are at the bottom of the tree, we need to handle hash conflits here
+	for i := 0; i < len(y.vals); i++ {
+		if y.vals[i].sameKey(kv) {
+			y.vals[i] = kv
+			return y
+		}
+	}
 
-	return y
+	y.vals = append(y.vals, kv)
+
+	return t
 }
 
 // Get a value from the trie if it exists and (nil, false) if it doesn't
@@ -128,15 +144,9 @@ func (t *Trie) Get(key []byte) (interface{}, bool) {
 	for y != nil {
 
 		// go through the list of elements to check to see if it is in here
-		l := y.vals.Filter(func(v *List) bool {
-			log.Println(v)
-			return v.val.(*trieKeyValue).sameKey(kv)
-		})
-
-		if l != nil {
-			// if the length of the list is 1, we has found our key
-			if l.Len() == 1 {
-				return l.val.(*trieKeyValue).value, true
+		for _, v := range y.vals {
+			if v.sameKey(kv) {
+				return v.value, true
 			}
 		}
 

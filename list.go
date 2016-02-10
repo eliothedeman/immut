@@ -111,6 +111,7 @@ func (l *List) Append(val interface{}) *List {
 	return n
 }
 
+// Next returns the next node in the list
 func (l *List) Next() *List {
 	return l.next
 }
