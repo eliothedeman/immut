@@ -42,6 +42,9 @@ func (l *List) Len() int {
 
 // String returns a string representation of the list
 func (l *List) String() string {
+	if l == nil {
+		return "nil"
+	}
 	b := bytes.NewBuffer(nil)
 	b.WriteString("[")
 	y := l
@@ -102,6 +105,35 @@ func (l *List) Append(val interface{}) *List {
 	} else {
 		n.next = &List{
 			val: val,
+		}
+	}
+
+	return n
+}
+
+func (l *List) Next() *List {
+	return l.next
+}
+
+func (l *List) Filter(f func(*List) bool) *List {
+	y := l
+	var n *List
+
+	if l.End() {
+		if f(l) {
+			n = NewList(l.val)
+		}
+	}
+
+	for !y.End() {
+		y = y.Next()
+
+		if f(y) {
+			if n == nil {
+				n = NewList(y.val)
+			} else {
+				n.Append(y.val)
+			}
 		}
 	}
 
