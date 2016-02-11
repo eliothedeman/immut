@@ -7,15 +7,16 @@ import (
 )
 
 const (
-	bits  = 4
-	width = 1 << bits
-	mask  = width - 1
+	bits     = 4
+	width    = 1 << bits
+	mask     = width - 1
+	maxDepth = 16 / bits
 )
 
 // A trieKey stores both the hashed value and the key that created the value
 type trieKeyValue struct {
 	hashedKey uint32
-	rawKey    []byte
+	rawKey    string
 	value     interface{}
 }
 
@@ -28,10 +29,10 @@ func (t *trieKeyValue) indexAtDepth(depth uint32) uint32 {
 }
 
 func (t *trieKeyValue) sameKey(check *trieKeyValue) bool {
-	return bytes.Equal(t.rawKey, check.rawKey)
+	return t.rawKey == check.rawKey
 }
 
-func newTrieKeyValue(key []byte, value interface{}) *trieKeyValue {
+func newTrieKeyValue(key string, value interface{}) *trieKeyValue {
 	return &trieKeyValue{
 		rawKey:    key,
 		hashedKey: hashKey(key),
@@ -39,9 +40,9 @@ func newTrieKeyValue(key []byte, value interface{}) *trieKeyValue {
 	}
 }
 
-func hashKey(b []byte) uint32 {
+func hashKey(b string) uint32 {
 	h := fnv.New32()
-	h.Write(b)
+	h.Write([]byte(b))
 	return h.Sum32()
 }
 
@@ -50,23 +51,21 @@ func hashKey(b []byte) uint32 {
 // Read about it at http://hypirion.com/musings/understanding-persistent-vector-pt-2
 type Trie struct {
 	depth    uint32
-	parent   *Trie
 	vals     []*trieKeyValue
 	children [width]*Trie
 }
 
 // NewTrie creates and returns a new *Trie
 func NewTrie(parent *Trie, vals []*trieKeyValue) *Trie {
-	t := &Trie{
-		parent: parent,
-		vals:   vals,
+	t := Trie{
+		vals: vals,
 	}
 
 	if parent != nil {
 		t.depth = parent.depth + 1
 	}
 
-	return t
+	return &t
 }
 
 // String returns the string representation of the trie
@@ -86,56 +85,48 @@ func (t *Trie) String() string {
 	return b.String()
 }
 
-// IsRoot returns true if this is the root node of the trie
-func (t *Trie) IsRoot() bool {
-	return t.parent == nil
+// Put inserts a key, val pair into the trie
+func (t *Trie) Put(key string, val interface{}) *Trie {
+	kv := newTrieKeyValue(key, val)
+	return t.put(kv)
 }
 
-// Put inserts a key, val pair into the trie
-func (t *Trie) Put(key []byte, val interface{}) *Trie {
-
-	kv := newTrieKeyValue(key, val)
+func (t *Trie) put(kv *trieKeyValue) *Trie {
 
 	// the path we use to insert the key
 	// these nodes will have to be reallocated
-	y := t
-	path := NewList(y)
+	z := *t
+	y := &z
+	index := kv.indexAtDepth(t.depth)
 
-	// stop at 8 levels deep
-	for y.depth < 8 {
-		if !y.test(kv) {
-			// if the slot is open at this level, insert the kv
-			y.children[kv.indexAtDepth(y.depth)] = NewTrie(y, []*trieKeyValue{kv})
-			return y
-		}
-		y = y.children[kv.indexAtDepth(y.depth)]
-
-		// check to see if any of the "vals" stored at this level contain this hash
-		for i := 0; i < len(y.vals); i++ {
-			if y.vals[i].sameKey(kv) {
-				y.vals[i] = kv
-				return t
-			}
-
-		}
-		path.Prepend(y)
+	// if the slot is open at this level, insert the kv
+	if !y.test(kv) {
+		y.children[index] = NewTrie(y, []*trieKeyValue{kv})
+		return y
 	}
 
-	// because we are at the bottom of the tree, we need to handle hash conflits here
-	for i := 0; i < len(y.vals); i++ {
-		if y.vals[i].sameKey(kv) {
-			y.vals[i] = kv
+	// if we are at the max depth, start appending
+	if y.depth >= maxDepth {
+		y.vals = append(y.vals, kv)
+		return y
+	}
+
+	x := y.children[index]
+
+	// check for a hash collision or that the key already exists
+	for i := 0; i < len(x.vals); i++ {
+		if x.vals[i].sameKey(kv) {
+			y.children[index].vals[i] = kv
 			return y
 		}
 	}
 
-	y.vals = append(y.vals, kv)
-
-	return t
+	y.children[index] = y.children[index].put(kv)
+	return y
 }
 
 // Get a value from the trie if it exists and (nil, false) if it doesn't
-func (t *Trie) Get(key []byte) (interface{}, bool) {
+func (t *Trie) Get(key string) (interface{}, bool) {
 	y := t
 	kv := newTrieKeyValue(key, nil)
 
