@@ -9,12 +9,12 @@ import (
 func TestTriePutGet(t *testing.T) {
 	x := NewTrie(nil, nil)
 
-	y := x.Put("hello", "world")
-	if _, found := x.Get("hello"); found {
+	y := x.Put([]byte("hello"), "world")
+	if _, found := x.Get([]byte("hello")); found {
 		t.Error("Persistance broken. Hellow should not have been found")
 	}
 
-	if out, found := y.Get("hello"); !found || out.(string) != "world" {
+	if out, found := y.Get([]byte("hello")); !found || out.(string) != "world" {
 		t.Fail()
 	}
 }
@@ -35,7 +35,7 @@ func BenchmarkTriePut(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		x = x.Put(strs[i%len(strs)], randutil.Int())
+		x = x.Put([]byte(strs[i%len(strs)]), randutil.Int())
 	}
 }
 
