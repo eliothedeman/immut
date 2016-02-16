@@ -3,7 +3,28 @@ package immut
 import (
 	"bytes"
 	"testing"
+
+	. "github.com/smartystreets/goconvey/convey"
 )
+
+func TestHashMapPut(t *testing.T) {
+	Convey("Given a Hashmap, key and value", t, func() {
+		h := NewHashMap()
+		k := 72323
+		v := "hello world"
+
+		Convey("When the value is stored with the given key", func() {
+			h = h.Put(k, v)
+
+			Convey("Expect to retrieve the value", func() {
+				nv, found := h.Get(k)
+				So(found, ShouldNotEqual, nil)
+				So(nv, ShouldEqual, v)
+			})
+		})
+
+	})
+}
 
 func TestIToBytes(t *testing.T) {
 	// TODO add more tests for every type and some negative tests
