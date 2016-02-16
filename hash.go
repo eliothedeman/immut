@@ -83,9 +83,9 @@ func (i *UintHashMap) Put(k uint64, v interface{}) *UintHashMap {
 }
 
 // Get the value stored at the given key
-func (i *UintHashMap) Get(k int) (interface{}, bool) {
+func (i *UintHashMap) Get(k uint64) (interface{}, bool) {
 	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(k))
+	binary.LittleEndian.PutUint64(b, k)
 
 	return i.t.Get(b)
 }
