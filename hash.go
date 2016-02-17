@@ -72,6 +72,12 @@ type UintHashMap struct {
 	t *Trie
 }
 
+func NewUintHashMap() *UintHashMap {
+	return &UintHashMap{
+		t: NewTrie(nil, nil),
+	}
+}
+
 // Put a kv pair into the map
 func (i *UintHashMap) Put(k uint64, v interface{}) *UintHashMap {
 	b := make([]byte, 8)
