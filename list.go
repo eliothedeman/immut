@@ -116,27 +116,31 @@ func (l *List) Next() *List {
 	return l.next
 }
 
+func (l *List) Each(f func(i interface{})) {
+	if l == nil {
+		return
+	}
+
+	f(l.val)
+	l.Next().Each(f)
+}
+
 func (l *List) Filter(f func(*List) bool) *List {
-	y := l
-	var n *List
+	if l == nil {
+		return nil
+	}
+
+	if f(l) {
+
+		n := NewList(l.val)
+		n.next = n.next.Filter(f)
+		return n
+	}
 
 	if l.End() {
-		if f(l) {
-			n = NewList(l.val)
-		}
+		return nil
 	}
 
-	for !y.End() {
-		y = y.Next()
+	return l.next.Filter(f)
 
-		if f(y) {
-			if n == nil {
-				n = NewList(y.val)
-			} else {
-				n.Append(y.val)
-			}
-		}
-	}
-
-	return n
 }

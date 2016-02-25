@@ -28,14 +28,23 @@ func randStrs(count int) []string {
 	return b
 }
 
+func randBytes(count int) [][]byte {
+	b := make([][]byte, count)
+	x := randStrs(count)
+	for i := 0; i < count; i++ {
+		b[i] = []byte(x[i])
+	}
+	return b
+}
+
 func BenchmarkTriePut(b *testing.B) {
 
-	strs := randStrs(1000)
+	strs := randBytes(1000)
 	x := NewTrie(nil, nil)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		x = x.Put([]byte(strs[i%len(strs)]), randutil.Int())
+		x = x.Put(strs[i%len(strs)], randutil.Int())
 	}
 }
 
