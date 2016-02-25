@@ -11,7 +11,7 @@ func TestTriePutGet(t *testing.T) {
 
 	y := x.Put([]byte("hello"), "world")
 	if _, found := x.Get([]byte("hello")); found {
-		t.Error("Persistance broken. Hellow should not have been found")
+		t.Error("Persistance broken. Hello should not have been found")
 	}
 
 	if out, found := y.Get([]byte("hello")); !found || out.(string) != "world" {

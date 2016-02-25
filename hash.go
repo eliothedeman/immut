@@ -2,6 +2,7 @@ package immut
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/fnv"
 	"math"
 )
@@ -185,5 +186,6 @@ func iToBytes(i interface{}) []byte {
 		return b
 	}
 
-	return nil
+	// last resort
+	return []byte(fmt.Sprint(i))
 }
