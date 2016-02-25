@@ -103,13 +103,15 @@ func (t *Trie) put(e Entry) *Trie {
 	index := e.indexAtDepth(t.depth)
 
 	// if the slot is open at this level, insert the e
-	if !y.test(e) {
+	if y.children[index] == nil {
+		// log.Println("Inserting new trie", t.depth)
 		y.children[index] = NewTrie(y, []Entry{e})
 		return y
 	}
 
 	// if we are at the max depth, start appending
 	if y.depth >= maxDepth {
+		// log.Println("Appending at ", t.depth)
 		y.vals = append(y.vals, e)
 		return y
 	}
