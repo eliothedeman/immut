@@ -13,7 +13,69 @@ const (
 	maxDepth = 16 / bits
 )
 
-// A trieKey stores both the hashed value and the key that created the value
+// A Trie is an immutible implementation of of trie
+// Inspired by Rich Hickey's implementation in clojure.
+// Read about it at http://hypirion.com/musings/understanding-persistent-vector-pt-2
+type Trie struct {
+	root *TNode
+	size int
+}
+
+// Size returns the number of keys/vals in the trie
+func (t *Trie) Size() int {
+	return t.size
+}
+
+// NewTrie creates an empty Trie and returns it
+func NewTrie() *Trie {
+	return &Trie{
+		root: NewTNode(nil, nil),
+	}
+}
+
+// Put inserts the given value at the given key
+func (t *Trie) Put(key []byte, val interface{}) *Trie {
+	return &Trie{
+		root: t.root.Put(key, val),
+		size: t.size + 1,
+	}
+}
+
+// Get returns the value stored at the given key
+func (t *Trie) Get(key []byte) (interface{}, bool) {
+	return t.root.Get(key)
+}
+
+// Each runs the given function on every k,v pair
+func (t *Trie) Each(f func([]byte, interface{})) {
+	t.root.Each(f)
+}
+
+// Keys returns all of the keys stored in the trie
+func (t *Trie) Keys() [][]byte {
+	keys := make([][]byte, t.size)
+	count := 0
+	t.Each(func(k []byte, v interface{}) {
+		keys[count] = k
+		count += 1
+	})
+
+	return keys
+}
+
+// Values returns all fo the values stored in the trie
+func (t *Trie) Values() []interface{} {
+	values := make([]interface{}, t.size)
+	count := 0
+	t.Each(func(k []byte, v interface{}) {
+		values[count] = v
+		count += 1
+	})
+
+	return values
+}
+
+// A TNodeKey stores both the hashed value and the key that created the value
 type Entry struct {
 	hashedKey uint32
 	rawKey    []byte
@@ -49,18 +111,15 @@ func hashKey(key []byte) uint32 {
 	return h.Sum32()
 }
 
-// A Trie is an immutible implementation of of trie.
-// Inspired by Rich Hickey's implementation in clojure.
-// Read about it at http://hypirion.com/musings/understanding-persistent-vector-pt-2
-type Trie struct {
+type TNode struct {
 	depth    uint32
 	vals     []Entry
-	children [width]*Trie
+	children [width]*TNode
 }
 
-// NewTrie creates and returns a new *Trie
-func NewTrie(parent *Trie, vals []Entry) *Trie {
-	t := Trie{
+// NewTNode creates and returns a new *TNode
+func NewTNode(parent *TNode, vals []Entry) *TNode {
+	t := TNode{
 		vals: vals,
 	}
 
@@ -71,8 +130,23 @@ func NewTrie(parent *Trie, vals []Entry) *Trie {
 	return &t
 }
 
-// String returns the string representation of the trie
-func (t *Trie) String() string {
+// Each runs a function over all k,v pairs in the node and it's children
+func (t *TNode) Each(f func([]byte, interface{})) {
+	for _, e := range t.vals {
+		f(e.rawKey, e.value)
+	}
+
+	// now all children
+	for i := 0; i < len(t.children); i++ {
+		x := t.children[i]
+		if x != nil {
+			x.Each(f)
+		}
+	}
+}
+
+// String returns the string representation of the TNode
+func (t *TNode) String() string {
 	if t == nil {
 		return ""
 	}
@@ -88,13 +162,13 @@ func (t *Trie) String() string {
 	return b.String()
 }
 
-// Put inserts a key, val pair into the trie
-func (t *Trie) Put(key []byte, val interface{}) *Trie {
+// Put inserts a key, val pair into the TNode
+func (t *TNode) Put(key []byte, val interface{}) *TNode {
 	e := newEntry(key, val)
 	return t.put(e)
 }
 
-func (t *Trie) put(e Entry) *Trie {
+func (t *TNode) put(e Entry) *TNode {
 
 	// the path we use to insert the key
 	// these nodes will have to be reallocated
@@ -104,8 +178,8 @@ func (t *Trie) put(e Entry) *Trie {
 
 	// if the slot is open at this level, insert the e
 	if y.children[index] == nil {
-		// log.Println("Inserting new trie", t.depth)
-		y.children[index] = NewTrie(y, []Entry{e})
+		// log.Println("Inserting new TNode", t.depth)
+		y.children[index] = NewTNode(y, []Entry{e})
 		return y
 	}
 
@@ -130,8 +204,8 @@ func (t *Trie) put(e Entry) *Trie {
 	return y
 }
 
-// Get a value from the trie if it exists and (nil, false) if it doesn't
-func (t *Trie) Get(key []byte) (interface{}, bool) {
+// Get a value from the TNode if it exists and (nil, false) if it doesn't
+func (t *TNode) Get(key []byte) (interface{}, bool) {
 	y := t
 	e := newEntry(key, nil)
 
@@ -154,8 +228,8 @@ func (t *Trie) Get(key []byte) (interface{}, bool) {
 	return nil, false
 }
 
-// test to see if this key already exists at this level of the trie
-func (t *Trie) test(k Entry) bool {
+// test to see if this key already exists at this level of the TNode
+func (t *TNode) test(k Entry) bool {
 
 	return t.children[k.indexAtDepth(t.depth)] != nil
 }

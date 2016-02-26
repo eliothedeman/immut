@@ -7,7 +7,7 @@ import (
 )
 
 func TestTriePutGet(t *testing.T) {
-	x := NewTrie(nil, nil)
+	x := NewTrie()
 
 	y := x.Put([]byte("hello"), "world")
 	if _, found := x.Get([]byte("hello")); found {
@@ -40,7 +40,7 @@ func randBytes(count int) [][]byte {
 func BenchmarkTriePut(b *testing.B) {
 
 	strs := randBytes(1000)
-	x := NewTrie(nil, nil)
+	x := NewTrie()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

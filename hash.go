@@ -22,27 +22,53 @@ type Byteser interface {
 
 // HashMap maps anything to anything using the immutible trie type
 type HashMap struct {
-	t *Trie
+	keys *Trie
+	vals *Trie
 }
 
 // NewHashMap
 func NewHashMap() *HashMap {
 	return &HashMap{
-		t: NewTrie(nil, nil),
+		keys: NewTrie(),
+		vals: NewTrie(),
 	}
+}
+
+// Each funs a function on each k,v pair
+func (h *HashMap) Each(f func(k, v interface{})) {
+	keys := h.keys.Values()
+
+	for _, k := range keys {
+		v, _ := h.Get(k)
+		f(k, v)
+	}
+}
+
+// Keys returns the keys stored in the hash map
+func (h *HashMap) Keys() []interface{} {
+	return h.keys.Values()
+}
+
+// Values returns the values stored in the has map
+func (h *HashMap) Values() []interface{} {
+	return h.vals.Values()
 }
 
 // Put will map anything to anything in the internal trie
 func (h *HashMap) Put(k, v interface{}) *HashMap {
-	newT := h.t.Put(iToBytes(k), v)
+	kBytes := iToBytes(k)
+	nKeys := h.keys.Put(kBytes, k)
+	nVals := h.vals.Put(kBytes, v)
+
 	return &HashMap{
-		t: newT,
+		keys: nKeys,
+		vals: nVals,
 	}
 }
 
 // Get returns the value stored at the given key if it exists else nil, false
 func (h *HashMap) Get(k interface{}) (interface{}, bool) {
-	return h.t.Get(iToBytes(k))
+	return h.vals.Get(iToBytes(k))
 }
 
 // IntHashMap maps an int to anything using an immutable trie
@@ -75,7 +101,7 @@ type UintHashMap struct {
 
 func NewUintHashMap() *UintHashMap {
 	return &UintHashMap{
-		t: NewTrie(nil, nil),
+		t: NewTrie(),
 	}
 }
 

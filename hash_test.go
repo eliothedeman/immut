@@ -64,6 +64,27 @@ func TestHashAnything(t *testing.T) {
 	}
 }
 
+func TestHashMap(t *testing.T) {
+
+	Convey("Test inserting into a hash map and iterating over it", t, func() {
+		h := NewHashMap()
+		container := map[int]bool{}
+		for i := 0; i < 100; i++ {
+			h = h.Put(i, i)
+			container[i] = true
+		}
+
+		h.Each(func(k, v interface{}) {
+			So(k, ShouldEqual, v)
+			So(container, ShouldContainKey, k)
+			delete(container, k.(int))
+		})
+
+		So(len(container), ShouldEqual, 0)
+
+	})
+}
+
 func BenchmarkHashAnythingStr(b *testing.B) {
 	strs := randStrs(10000)
 	b.ReportAllocs()
