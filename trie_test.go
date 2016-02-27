@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/eliothedeman/randutil"
+	. "github.com/smartystreets/goconvey/convey"
 )
 
 func TestTriePutGet(t *testing.T) {
@@ -17,6 +18,26 @@ func TestTriePutGet(t *testing.T) {
 	if out, found := y.Get([]byte("hello")); !found || out.(string) != "world" {
 		t.Fail()
 	}
+}
+
+func TestTrieDel(t *testing.T) {
+	Convey("Ensure deleting keys from one trie doesn't effect the previous generation", t, func() {
+		x := NewTrie()
+
+		x = x.Put([]byte("hello"), "world")
+		y, i := x.Del([]byte("hello"))
+		So(i, ShouldEqual, "world")
+
+		keys := x.Keys()
+		for _, k := range keys {
+			So("hello", ShouldEqual, string(k))
+		}
+		keys = y.Keys()
+		for _, k := range keys {
+			So("hello", ShouldNotEqual, string(k))
+		}
+
+	})
 }
 
 func randStrs(count int) []string {
@@ -45,6 +66,16 @@ func BenchmarkTriePut(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		x = x.Put(strs[i%len(strs)], randutil.Int())
+	}
+}
+
+func BenchmarkTriePutSingle(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	x := NewTrie()
+	s := []byte("hell world")
+	for i := 0; i < b.N; i++ {
+		x = x.Put(s, i)
 	}
 }
 

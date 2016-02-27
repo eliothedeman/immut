@@ -46,6 +46,19 @@ func (t *Trie) Get(key []byte) (interface{}, bool) {
 	return t.root.Get(key)
 }
 
+// Del remove the value stored at the given key and return the value that was stored there
+func (t *Trie) Del(key []byte) (*Trie, interface{}) {
+	n, i, b := t.root.Del(key)
+	if !b {
+		return t, nil
+	}
+
+	return &Trie{
+		root: n,
+		size: t.size - 1,
+	}, i
+}
+
 // Each runs the given function on every k,v pair
 func (t *Trie) Each(f func([]byte, interface{})) {
 	t.root.Each(f)
@@ -54,6 +67,9 @@ func (t *Trie) Each(f func([]byte, interface{})) {
 // Keys returns all of the keys stored in the trie
 func (t *Trie) Keys() [][]byte {
 	keys := make([][]byte, t.size)
+	if t.size == 0 {
+		return keys
+	}
 	count := 0
 	t.Each(func(k []byte, v interface{}) {
 		keys[count] = k
@@ -160,6 +176,40 @@ func (t *TNode) String() string {
 	b.WriteString(fmt.Sprintf("%v", t.vals))
 	b.WriteString("\n}")
 	return b.String()
+}
+
+// Del remove the value stored at the given key, returns the value if it existed
+func (t *TNode) Del(key []byte) (*TNode, interface{}, bool) {
+	e := newEntry(key, nil)
+	return t.del(e)
+}
+
+func (t *TNode) del(e Entry) (*TNode, interface{}, bool) {
+	// find the index at the given depth, if it doesn't exist, try to go lower until it does
+	z := *t
+	y := &z
+
+	// hunt for the key at the current level's values
+	for i := 0; i < len(z.vals); i++ {
+		if z.vals[i].sameKey(e) {
+
+			// delete in slice
+			y.vals = append(y.vals[:i], y.vals[i:]...)
+			return y, z.vals[i].value, true
+		}
+	}
+	index := e.indexAtDepth(t.depth)
+
+	if y.children[index] != nil {
+		n, i, b := y.children[index].del(e)
+		if b {
+			y.children[index] = n
+			return y, i, b
+		}
+
+	}
+	// nothing was found
+	return t, nil, false
 }
 
 // Put inserts a key, val pair into the TNode
