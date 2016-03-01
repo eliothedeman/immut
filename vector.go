@@ -49,5 +49,17 @@ func (v *Vector) Get(index int) (interface{}, bool) {
 // Slice returns a subslice of the vector.
 // same as the built in slice operations mySlice[1:10]
 func (v *Vector) Slice(start, end int) *Vector {
-	return nil
+
+	n := NewVector()
+
+	// TODO Don't do all of these allocations
+	count := 0
+	for i := start; i <= end; i++ {
+		x, found := v.Get(i)
+		if found {
+			n = n.Put(count, x)
+		}
+		count++
+	}
+	return n
 }
