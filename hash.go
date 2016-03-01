@@ -71,6 +71,19 @@ func (h *HashMap) Get(k interface{}) (interface{}, bool) {
 	return h.vals.Get(iToBytes(k))
 }
 
+// Del deletes the value stored at the given key
+func (h *HashMap) Del(k interface{}) (*HashMap, interface{}) {
+	kBytes := iToBytes(k)
+	nKeys, _ := h.keys.Del(kBytes)
+	nVals, val := h.vals.Del(kBytes)
+
+	return &HashMap{
+		keys: nKeys,
+		vals: nVals,
+	}, val
+
+}
+
 // IntHashMap maps an int to anything using an immutable trie
 type IntHashMap struct {
 	t *Trie
