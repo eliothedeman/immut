@@ -9,6 +9,7 @@ import (
 
 const (
 	Int = iota
+
 	UInt
 	Float
 	String
