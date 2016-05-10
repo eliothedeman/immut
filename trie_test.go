@@ -20,6 +20,19 @@ func TestTriePutGet(t *testing.T) {
 	}
 }
 
+func TestMassInsert(t *testing.T) {
+	x := NewTrie()
+
+	x = x.Put([]byte("hello"), "world")
+	for i := 0; i < 10000; i++ {
+		x = x.Put(randutil.Bytes(10), 10)
+	}
+
+	if y, _ := x.Get([]byte("hello")); y != "world" {
+		t.Fail()
+	}
+}
+
 func TestTrieDel(t *testing.T) {
 	Convey("Ensure deleting keys from one trie doesn't effect the previous generation", t, func() {
 		x := NewTrie()
