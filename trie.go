@@ -2,284 +2,571 @@ package immut
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"hash/fnv"
+	"hash/maphash"
 )
 
 const (
-	bits     = 4
-	width    = 1 << bits
-	mask     = width - 1
-	maxDepth = 16 / bits
+	bitsPerLevel = 2
+	width        = 1 << bitsPerLevel // 4 children per node
+	maxDepth     = 64 / bitsPerLevel
+	ones         = ^uint64(0)
+	mask         = ones >> (64 - bitsPerLevel)
 )
 
-// A Trie is an immutible implementation of of trie
-// Inspired by Rich Hickey's implementation in clojure.
-// Read about it at http://hypirion.com/musings/understanding-persistent-vector-pt-2
-type Trie struct {
-	root *TNode
-	size int
+var (
+	seed = maphash.MakeSeed()
+)
+
+type Key = comparable
+type Val = any
+type hashedKey = uint64
+
+// leaf stores a key-value pair
+type leaf[K Key, V Val] struct {
+	key K
+	val V
 }
 
-// Size returns the number of keys/vals in the trie
-func (t *Trie) Size() int {
-	return t.size
+// children is a fixed-size array of 4 child nodes (inlined, no heap allocation)
+type children[K Key, V Val] [width]node[K, V]
+
+// node uses inlined children array for memory efficiency with 4-way branching.
+type node[K Key, V Val] struct {
+	leaf     *leaf[K, V]       // Optional value stored at this node
+	children *children[K, V]   // Pointer to inlined children array (nil if no children)
 }
 
-// NewTrie creates an empty Trie and returns it
-func NewTrie() *Trie {
-	return &Trie{
-		root: NewTNode(nil, nil),
+// isEmpty returns true if this node has no data
+func (n node[K, V]) isEmpty() bool {
+	return n.leaf == nil && n.children == nil
+}
+
+// hash returns the hash of a key using maphash
+func hash[K Key](k K) hashedKey {
+	return maphash.Comparable(seed, k)
+}
+
+// index extracts the child index from a hash at a given depth
+func index(h hashedKey, depth uint) uint {
+	shift := 64 - bitsPerLevel*(depth+1)
+	return uint((h >> shift) & mask)
+}
+
+func (n node[K, V]) insert(k K, v V, h hashedKey, depth uint) node[K, V] {
+	// Base case: empty node, create a new leaf
+	if n.isEmpty() {
+		return node[K, V]{
+			leaf: &leaf[K, V]{key: k, val: v},
+		}
 	}
-}
 
-// Put inserts the given value at the given key
-func (t *Trie) Put(key []byte, val interface{}) *Trie {
-	return &Trie{
-		root: t.root.Put(key, val),
-		size: t.size + 1,
+	// Copy node for immutability
+	x := node[K, V]{
+		leaf: n.leaf,
 	}
-}
-
-// Get returns the value stored at the given key
-func (t *Trie) Get(key []byte) (interface{}, bool) {
-	return t.root.Get(key)
-}
-
-// Del remove the value stored at the given key and return the value that was stored there
-func (t *Trie) Del(key []byte) (*Trie, interface{}) {
-	n, i, b := t.root.Del(key)
-	if !b {
-		return t, nil
+	if n.children != nil {
+		c := *n.children
+		x.children = &c
 	}
 
-	return &Trie{
-		root: n,
-		size: t.size - 1,
-	}, i
-}
-
-// Each runs the given function on every k,v pair
-func (t *Trie) Each(f func([]byte, interface{})) {
-	t.root.Each(f)
-}
-
-// Keys returns all of the keys stored in the trie
-func (t *Trie) Keys() [][]byte {
-	keys := make([][]byte, t.size)
-	if t.size == 0 {
-		return keys
+	// If this node has no leaf, store directly here
+	if x.leaf == nil {
+		x.leaf = &leaf[K, V]{key: k, val: v}
+		return x
 	}
-	count := 0
-	t.Each(func(k []byte, v interface{}) {
-		keys[count] = k
-		count += 1
+
+	// Same key: update the value
+	if x.leaf.key == k {
+		x.leaf = &leaf[K, V]{key: k, val: v}
+		return x
+	}
+
+	// Different key: need to push existing leaf down and insert new key
+	// Ensure children array exists
+	if x.children == nil {
+		x.children = &children[K, V]{}
+	}
+
+	// Push existing leaf down into children
+	existingHash := hash(x.leaf.key)
+	existingIdx := index(existingHash, depth)
+	x.children[existingIdx] = x.children[existingIdx].insert(x.leaf.key, x.leaf.val, existingHash, depth+1)
+	x.leaf = nil
+
+	// Now insert the new key
+	idx := index(h, depth)
+	x.children[idx] = x.children[idx].insert(k, v, h, depth+1)
+	return x
+}
+
+// get retrieves a value from the trie by key
+func (n node[K, V]) get(k K, h hashedKey, depth uint) (V, bool) {
+	var zero V
+	if n.isEmpty() {
+		return zero, false
+	}
+
+	// Check if this node's leaf matches
+	if n.leaf != nil && n.leaf.key == k {
+		return n.leaf.val, true
+	}
+
+	// No children to search
+	if n.children == nil {
+		return zero, false
+	}
+
+	// Recurse into the appropriate child
+	idx := index(h, depth)
+	return n.children[idx].get(k, h, depth+1)
+}
+
+// delete removes a key from the trie, returning the new trie and whether the key was found
+func (n node[K, V]) delete(k K, h hashedKey, depth uint) (node[K, V], bool) {
+	if n.isEmpty() {
+		return node[K, V]{}, false
+	}
+
+	// Check if this node's leaf matches
+	if n.leaf != nil && n.leaf.key == k {
+		// Found the key - remove the leaf
+		return node[K, V]{children: n.children}, true
+	}
+
+	// No children to search
+	if n.children == nil {
+		return n, false
+	}
+
+	// Recurse into the appropriate child
+	idx := index(h, depth)
+	newChild, found := n.children[idx].delete(k, h, depth+1)
+	if !found {
+		return n, false
+	}
+
+	// Copy for immutability
+	x := node[K, V]{leaf: n.leaf}
+	c := *n.children
+	x.children = &c
+	x.children[idx] = newChild
+
+	return x, true
+}
+
+// count returns the number of key-value pairs in the trie
+func (n node[K, V]) count() int {
+	if n.isEmpty() {
+		return 0
+	}
+
+	c := 0
+	if n.leaf != nil {
+		c = 1
+	}
+
+	if n.children != nil {
+		for i := range n.children {
+			c += n.children[i].count()
+		}
+	}
+
+	return c
+}
+
+// forEach calls fn for each key-value pair in the trie
+func (n node[K, V]) forEach(fn func(K, V) bool) bool {
+	if n.isEmpty() {
+		return true
+	}
+
+	if n.leaf != nil {
+		if !fn(n.leaf.key, n.leaf.val) {
+			return false
+		}
+	}
+
+	if n.children != nil {
+		for i := range n.children {
+			if !n.children[i].forEach(fn) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// Map is an immutable hash map using a hash array mapped trie (HAMT).
+// All operations return a new Map, leaving the original unchanged.
+type Map[K Key, V Val] struct {
+	root node[K, V]
+	len  int
+}
+
+// Get retrieves a value by key. Returns the value and true if found,
+// or the zero value and false if not found.
+func (m Map[K, V]) Get(k K) (V, bool) {
+	h := hash(k)
+	return m.root.get(k, h, 0)
+}
+
+// Set returns a new Map with the key-value pair added or updated.
+// The original Map is unchanged.
+func (m Map[K, V]) Set(k K, v V) Map[K, V] {
+	h := hash(k)
+	// Check if key already exists to maintain accurate length
+	_, exists := m.root.get(k, h, 0)
+	newRoot := m.root.insert(k, v, h, 0)
+	newLen := m.len
+	if !exists {
+		newLen++
+	}
+	return Map[K, V]{root: newRoot, len: newLen}
+}
+
+// Delete returns a new Map with the key removed.
+// The original Map is unchanged. Returns the same Map if key not found.
+func (m Map[K, V]) Delete(k K) Map[K, V] {
+	h := hash(k)
+	newRoot, found := m.root.delete(k, h, 0)
+	if !found {
+		return m
+	}
+	return Map[K, V]{root: newRoot, len: m.len - 1}
+}
+
+// Len returns the number of key-value pairs in the Map.
+func (m Map[K, V]) Len() int {
+	return m.len
+}
+
+// ForEach calls fn for each key-value pair in the Map.
+// If fn returns false, iteration stops early.
+func (m Map[K, V]) ForEach(fn func(K, V) bool) {
+	m.root.forEach(fn)
+}
+
+// Has returns true if the key exists in the Map.
+func (m Map[K, V]) Has(k K) bool {
+	_, ok := m.Get(k)
+	return ok
+}
+
+// Keys returns a slice of all keys in the Map.
+func (m Map[K, V]) Keys() []K {
+	keys := make([]K, 0, m.len)
+	m.ForEach(func(k K, _ V) bool {
+		keys = append(keys, k)
+		return true
 	})
-
 	return keys
 }
 
-// Values returns all fo the values stored in the trie
-func (t *Trie) Values() []interface{} {
-	values := make([]interface{}, t.size)
-	count := 0
-	t.Each(func(k []byte, v interface{}) {
-		values[count] = v
-		count += 1
+// Values returns a slice of all values in the Map.
+func (m Map[K, V]) Values() []V {
+	vals := make([]V, 0, m.len)
+	m.ForEach(func(_ K, v V) bool {
+		vals = append(vals, v)
+		return true
 	})
-
-	return values
+	return vals
 }
 
-// A TNodeKey stores both the hashed value and the key that created the value
-type Entry struct {
-	hashedKey uint32
-	rawKey    []byte
-	value     interface{}
+// ToMap returns a standard Go map with all key-value pairs.
+func (m Map[K, V]) ToMap() map[K]V {
+	result := make(map[K]V, m.len)
+	m.ForEach(func(k K, v V) bool {
+		result[k] = v
+		return true
+	})
+	return result
 }
 
-func printBits(u uint32) {
-	fmt.Printf("%0b \n", u)
+// Constructors
+
+// NewMap creates an empty Map.
+func NewMap[K Key, V Val]() Map[K, V] {
+	return Map[K, V]{}
 }
 
-func (t Entry) indexAtDepth(depth uint32) uint32 {
-	return (t.hashedKey >> (depth)) & mask
-}
-
-func (t Entry) sameKey(check Entry) bool {
-	return bytes.Equal(t.rawKey, check.rawKey)
-}
-
-func newEntry(key []byte, value interface{}) Entry {
-	return Entry{
-		rawKey:    key,
-		hashedKey: hashKey(key),
-		value:     value,
+// MapFrom creates a Map from a standard Go map.
+// Uses mutable construction internally for efficiency.
+func MapFrom[K Key, V Val](m map[K]V) Map[K, V] {
+	b := NewBuilder[K, V]()
+	for k, v := range m {
+		b.Set(k, v)
 	}
+	return b.Build()
 }
 
-// hashKey hashes a key into a uint32
-func hashKey(key []byte) uint32 {
-
-	// need to convert to a []byte
-	h := fnv.New32()
-	h.Write(key)
-	return h.Sum32()
+// MapFromPairs creates a Map from alternating key-value pairs.
+// Panics if an odd number of arguments is provided.
+func MapFromPairs[K Key, V Val](pairs ...any) Map[K, V] {
+	if len(pairs)%2 != 0 {
+		panic("MapFromPairs requires an even number of arguments")
+	}
+	b := NewBuilder[K, V]()
+	for i := 0; i < len(pairs); i += 2 {
+		b.Set(pairs[i].(K), pairs[i+1].(V))
+	}
+	return b.Build()
 }
 
-type TNode struct {
-	depth    uint32
-	vals     []Entry
-	children [width]*TNode
+// Builder provides efficient mutable construction of an immutable Map.
+// After calling Build(), the Builder should not be reused.
+type Builder[K Key, V Val] struct {
+	root node[K, V]
+	len  int
 }
 
-// NewTNode creates and returns a new *TNode
-func NewTNode(parent *TNode, vals []Entry) *TNode {
-	t := TNode{
-		vals: vals,
+// NewBuilder creates a new Builder for constructing a Map.
+func NewBuilder[K Key, V Val]() *Builder[K, V] {
+	return &Builder[K, V]{}
+}
+
+// Set adds or updates a key-value pair. Mutates the builder in place.
+func (b *Builder[K, V]) Set(k K, v V) *Builder[K, V] {
+	h := hash(k)
+	_, exists := b.root.get(k, h, 0)
+	b.root.insertMut(k, v, h, 0)
+	if !exists {
+		b.len++
+	}
+	return b
+}
+
+// Delete removes a key. Mutates the builder in place.
+func (b *Builder[K, V]) Delete(k K) *Builder[K, V] {
+	h := hash(k)
+	if deleted := b.root.deleteMut(k, h, 0); deleted {
+		b.len--
+	}
+	return b
+}
+
+// Len returns the current number of entries.
+func (b *Builder[K, V]) Len() int {
+	return b.len
+}
+
+// Build returns the constructed Map.
+// The Builder should not be used after calling Build.
+func (b *Builder[K, V]) Build() Map[K, V] {
+	return Map[K, V]{root: b.root, len: b.len}
+}
+
+// insertMut mutates the node in place (for builder use only)
+func (n *node[K, V]) insertMut(k K, v V, h hashedKey, depth uint) {
+	// Empty node - just set the leaf
+	if n.isEmpty() {
+		n.leaf = &leaf[K, V]{key: k, val: v}
+		return
 	}
 
-	if parent != nil {
-		t.depth = parent.depth + 1
+	// No leaf at this node - store directly
+	if n.leaf == nil {
+		n.leaf = &leaf[K, V]{key: k, val: v}
+		return
 	}
 
-	return &t
+	// Same key - update value
+	if n.leaf.key == k {
+		n.leaf = &leaf[K, V]{key: k, val: v}
+		return
+	}
+
+	// Different key - push existing down and insert new
+	// Ensure children array exists
+	if n.children == nil {
+		n.children = &children[K, V]{}
+	}
+
+	// Push existing leaf down
+	existingHash := hash(n.leaf.key)
+	existingIdx := index(existingHash, depth)
+	n.children[existingIdx].insertMut(n.leaf.key, n.leaf.val, existingHash, depth+1)
+	n.leaf = nil
+
+	// Insert new key
+	idx := index(h, depth)
+	n.children[idx].insertMut(k, v, h, depth+1)
 }
 
-// Each runs a function over all k,v pairs in the node and it's children
-func (t *TNode) Each(f func([]byte, interface{})) {
-	for _, e := range t.vals {
-		f(e.rawKey, e.value)
+// deleteMut mutates the node in place (for builder use only)
+func (n *node[K, V]) deleteMut(k K, h hashedKey, depth uint) bool {
+	if n.isEmpty() {
+		return false
 	}
 
-	// now all children
-	for i := 0; i < len(t.children); i++ {
-		x := t.children[i]
-		if x != nil {
-			x.Each(f)
+	// Check if this node's leaf matches
+	if n.leaf != nil && n.leaf.key == k {
+		n.leaf = nil
+		return true
+	}
+
+	// No children to search
+	if n.children == nil {
+		return false
+	}
+
+	// Recurse into appropriate child
+	idx := index(h, depth)
+	return n.children[idx].deleteMut(k, h, depth+1)
+}
+
+// Set Operations
+
+// Union returns a new Map containing all key-value pairs from both maps.
+// If a key exists in both, the value from other takes precedence.
+func (m Map[K, V]) Union(other Map[K, V]) Map[K, V] {
+	result := m
+	other.ForEach(func(k K, v V) bool {
+		result = result.Set(k, v)
+		return true
+	})
+	return result
+}
+
+// Intersection returns a new Map containing only keys present in both maps.
+// Values are taken from the receiver (m).
+func (m Map[K, V]) Intersection(other Map[K, V]) Map[K, V] {
+	var result Map[K, V]
+	m.ForEach(func(k K, v V) bool {
+		if other.Has(k) {
+			result = result.Set(k, v)
 		}
-	}
+		return true
+	})
+	return result
 }
 
-// String returns the string representation of the TNode
-func (t *TNode) String() string {
-	if t == nil {
-		return ""
-	}
-	b := bytes.NewBuffer(nil)
-	b.WriteString("{\n")
-	for i := 0; i < len(t.children); i++ {
-		if t.children[i] != nil {
-			b.WriteString(fmt.Sprintf("\t%s\n", t.children[i]))
+// Difference returns a new Map containing keys from m that are not in other.
+func (m Map[K, V]) Difference(other Map[K, V]) Map[K, V] {
+	result := m
+	other.ForEach(func(k K, _ V) bool {
+		result = result.Delete(k)
+		return true
+	})
+	return result
+}
+
+// SymmetricDifference returns a new Map containing keys that are in either map but not both.
+func (m Map[K, V]) SymmetricDifference(other Map[K, V]) Map[K, V] {
+	var result Map[K, V]
+	// Add keys from m not in other
+	m.ForEach(func(k K, v V) bool {
+		if !other.Has(k) {
+			result = result.Set(k, v)
 		}
-	}
-	b.WriteString(fmt.Sprintf("%v", t.vals))
-	b.WriteString("\n}")
-	return b.String()
-}
-
-// Del remove the value stored at the given key, returns the value if it existed
-func (t *TNode) Del(key []byte) (*TNode, interface{}, bool) {
-	e := newEntry(key, nil)
-	return t.del(e)
-}
-
-func (t *TNode) del(e Entry) (*TNode, interface{}, bool) {
-	// find the index at the given depth, if it doesn't exist, try to go lower until it does
-	z := *t
-	y := &z
-
-	// hunt for the key at the current level's values
-	for i := 0; i < len(z.vals); i++ {
-		if z.vals[i].sameKey(e) {
-
-			// delete in slice
-			y.vals = append(y.vals[:i], y.vals[i:]...)
-			return y, z.vals[i].value, true
+		return true
+	})
+	// Add keys from other not in m
+	other.ForEach(func(k K, v V) bool {
+		if !m.Has(k) {
+			result = result.Set(k, v)
 		}
-	}
-	index := e.indexAtDepth(t.depth)
+		return true
+	})
+	return result
+}
 
-	if y.children[index] != nil {
-		n, i, b := y.children[index].del(e)
-		if b {
-			y.children[index] = n
-			return y, i, b
+// Merge returns a new Map with all entries from other added/updated.
+// This is an alias for Union.
+func (m Map[K, V]) Merge(other Map[K, V]) Map[K, V] {
+	return m.Union(other)
+}
+
+// Filter returns a new Map containing only entries where fn returns true.
+func (m Map[K, V]) Filter(fn func(K, V) bool) Map[K, V] {
+	var result Map[K, V]
+	m.ForEach(func(k K, v V) bool {
+		if fn(k, v) {
+			result = result.Set(k, v)
 		}
-
-	}
-	// nothing was found
-	return t, nil, false
+		return true
+	})
+	return result
 }
 
-// Put inserts a key, val pair into the TNode
-func (t *TNode) Put(key []byte, val interface{}) *TNode {
-	e := newEntry(key, val)
-	return t.put(e)
-}
-
-func (t *TNode) put(e Entry) *TNode {
-
-	// the path we use to insert the key
-	// these nodes will have to be reallocated
-	z := *t
-	y := &z
-	index := e.indexAtDepth(t.depth)
-
-	// if the slot is open at this level, insert the e
-	if y.children[index] == nil {
-		// log.Println("Inserting new TNode", t.depth)
-		y.children[index] = NewTNode(y, []Entry{e})
-		return y
+// Equal returns true if both maps have the same keys and values.
+// Values are compared using ==.
+func (m Map[K, V]) Equal(other Map[K, V]) bool {
+	if m.len != other.len {
+		return false
 	}
-
-	// if we are at the max depth, start appending
-	if y.depth >= maxDepth {
-		// log.Println("Appending at ", t.depth)
-		y.vals = append(y.vals, e)
-		return y
-	}
-
-	x := y.children[index]
-
-	// check for a hash collision or that the key already exists
-	for i := 0; i < len(x.vals); i++ {
-		if x.vals[i].sameKey(e) {
-			y.children[index].vals[i] = e
-			return y
+	equal := true
+	m.ForEach(func(k K, v V) bool {
+		otherV, ok := other.Get(k)
+		if !ok || any(v) != any(otherV) {
+			equal = false
+			return false
 		}
-	}
-
-	y.children[index] = y.children[index].put(e)
-	return y
+		return true
+	})
+	return equal
 }
 
-// Get a value from the TNode if it exists and (nil, false) if it doesn't
-func (t *TNode) Get(key []byte) (interface{}, bool) {
-	y := t
-	e := newEntry(key, nil)
+// MarshalJSON implements json.Marshaler for Map.
+// Serializes as a JSON object with string keys (keys must be string-convertible).
+func (m Map[K, V]) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.ToMap())
+}
 
-	// if this part of the hash exists here, go deeper
-	y = y.children[e.indexAtDepth(y.depth)]
-	for y != nil {
+// UnmarshalJSON implements json.Unmarshaler for Map.
+// Decodes directly into the trie without intermediate map allocation.
+func (m *Map[K, V]) UnmarshalJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
 
-		// go through the list of elements to check to see if it is in here
-		for _, v := range y.vals {
-			if v.sameKey(e) {
-				return v.value, true
-			}
+	// Expect opening brace
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok != json.Delim('{') {
+		return fmt.Errorf("expected '{', got %v", tok)
+	}
+
+	b := NewBuilder[K, V]()
+
+	// Read key-value pairs
+	for dec.More() {
+		// Read key (must be string for JSON objects)
+		keyTok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		keyStr, ok := keyTok.(string)
+		if !ok {
+			return fmt.Errorf("expected string key, got %T", keyTok)
 		}
 
-		y = y.children[e.indexAtDepth(y.depth)]
+		// Convert string key to K
+		var key K
+		if err := json.Unmarshal([]byte(`"`+keyStr+`"`), &key); err != nil {
+			return fmt.Errorf("cannot unmarshal key %q: %w", keyStr, err)
+		}
 
+		// Read value
+		var val V
+		if err := dec.Decode(&val); err != nil {
+			return fmt.Errorf("cannot decode value for key %q: %w", keyStr, err)
+		}
+
+		b.Set(key, val)
 	}
 
-	// nothing was found
-	return nil, false
-}
+	// Expect closing brace
+	tok, err = dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok != json.Delim('}') {
+		return fmt.Errorf("expected '}', got %v", tok)
+	}
 
-// test to see if this key already exists at this level of the TNode
-func (t *TNode) test(k Entry) bool {
-
-	return t.children[k.indexAtDepth(t.depth)] != nil
+	*m = b.Build()
+	return nil
 }
